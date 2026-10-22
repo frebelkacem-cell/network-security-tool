@@ -1,64 +1,88 @@
-# Réponses — TP 2 GitHub Actions : CI/CD et sécurité
+# Réponses — TP 2 GitHub Actions (CI/CD et sécurité)
 
-**Question 1 : pourquoi les tests ne dépendent-ils pas de l'ouverture réelle du port 443 ?**
+**Question 1 : Pourquoi les tests ne dépendent-ils pas de l'ouverture réelle du port 443 ?**
 
-`is_valid_port` ne fait que vérifier le type et la plage de valeur du port (un entier entre 1
-et 65535) : elle ne tente aucune connexion réseau. `test_reject_invalid_port` vérifie que
-`check_port` lève bien une `ValueError` *avant* d'ouvrir un socket, dès lors que le port est
-invalide. Les tests valident donc uniquement la logique de validation, pas l'état réel du
-réseau : ils sont déterministes et donnent le même résultat sur n'importe quelle machine
-(y compris le runner GitHub Actions), peu importe si le port 443 est réellement ouvert ou non.
+Parce qu'ils ne testent pas le réseau, seulement la logique de validation.
 
-**Question 2 : quelle différence entre `push` et `pull_request` ?**
+* `is_valid_port` vérifie juste que le port est un entier entre 1 et 65535. Elle n'ouvre
+  aucune connexion.
+* `test_reject_invalid_port` vérifie que `check_port` lève une `ValueError` quand le port est
+  invalide. Cette erreur est levée avant toute tentative de connexion, donc aucun socket n'est
+  ouvert.
 
-`push` déclenche le workflow à chaque fois qu'un commit est poussé directement sur une branche
-qui correspond au filtre (ici `main` ou `feature/**`) ; le job s'exécute alors sur le commit
-poussé. `pull_request` déclenche le workflow quand une Pull Request est ouverte ou mise à jour
-vers une branche cible (ici `main`) ; il s'exécute sur le résultat de la fusion hypothétique
-entre la branche source et la branche cible, ce qui permet de valider les changements *avant*
-qu'ils ne soient intégrés. C'est aussi l'événement utilisé pour les vérifications de statut
-affichées directement sur la PR (onglet "Checks").
+Les tests donnent donc toujours le même résultat, quelle que soit la machine (notre PC ou le
+runner GitHub Actions), et que le port 443 soit ouvert ou non. On dit qu'ils sont
+déterministes.
 
-**Question 3 : que se passe-t-il si pytest renvoie un code d'erreur ?**
+**Question 2 : Quelle différence entre `push` et `pull_request` ?**
 
-Quand `pytest` échoue, la commande se termine avec un code de sortie différent de 0. GitHub
-Actions considère alors l'étape "Run unit tests" comme échouée : le job s'arrête immédiatement
-et les étapes suivantes (ici "Security scan with Bandit") sont automatiquement **sautées**
-(sauf si elles sont configurées avec `continue-on-error` ou `if: always()`). Le job entier, et
-donc le run du workflow, est marqué en échec (croix rouge). C'est exactement ce qu'on a observé
-dans la capture du run "Demonstrate failing CI test".
+La différence porte sur le moment où le workflow se lance et sur le code qu'il teste.
 
-**Question 4 : pourquoi est-il utile de bloquer l'intégration d'une Pull Request lorsque les tests échouent ?**
+* `push` : le workflow se lance dès qu'on pousse un commit sur une branche surveillée (ici
+  `main` ou `feature/**`). Il teste le commit qu'on vient de pousser.
+* `pull_request` : le workflow se lance quand une PR vers `main` est ouverte ou mise à jour.
+  Il teste le résultat d'une fusion hypothétique entre la branche et `main`, c'est-à-dire ce
+  que deviendrait `main` si on acceptait la PR.
 
-Bloquer la fusion tant que les tests échouent protège la branche principale (`main`) contre
-l'introduction de régressions ou de code cassé : `main` reste toujours dans un état stable et
-déployable. Cela force aussi le développeur à corriger le problème immédiatement, pendant qu'il
-a encore le contexte en tête, plutôt que de laisser le bug se propager et être découvert plus
-tard (souvent par quelqu'un d'autre, en production). C'est une porte de qualité (quality gate)
-automatique, qui ne dépend pas de la vigilance humaine.
+Le second permet donc de valider les changements avant de les intégrer. C'est aussi lui qui
+affiche le résultat des vérifications directement sur la page de la PR (onglet « Checks »).
 
-**Question 5 : quelle différence entre ce contrôle SAST (Bandit) et les tests fonctionnels pytest ?**
+**Question 3 : Que se passe-t-il si pytest renvoie un code d'erreur ?**
 
-Bandit est un outil d'analyse statique (SAST — Static Application Security Testing) : il lit le
-code source sans l'exécuter, à la recherche de motifs connus comme risqués d'un point de vue
-sécurité (fonctions dangereuses, secrets en dur, usages non sûrs de certaines bibliothèques,
-etc.). Il ne vérifie pas que le programme fonctionne correctement. `pytest`, lui, exécute
-réellement le code et vérifie que son comportement correspond à ce qui est attendu
-(tests fonctionnels) : il valide la logique métier, pas la sécurité du code en tant que tel.
-Les deux contrôles sont complémentaires : l'un répond à "le code est-il correct ?", l'autre à
-"le code contient-il des pratiques dangereuses connues ?".
+Quand un test échoue, `pytest` se termine avec un code de sortie différent de 0. GitHub
+Actions considère alors que l'étape a échoué. La suite est la suivante :
 
-## Bonus — `python -m compileall -q network_check.py`
+1. l'étape « Run unit tests » est marquée en échec ;
+2. le job s'arrête et les étapes suivantes (ici Bandit) sont sautées ;
+3. le job, puis le run entier, s'affichent en rouge.
 
-Cette commande compile le fichier Python en bytecode (`.pyc`) sans l'exécuter. Elle vérifie
-uniquement que le fichier est **syntaxiquement valide** (pas d'erreur de syntaxe qui empêcherait
-même l'interpréteur de le charger). Elle est très rapide et permet d'échouer tôt en cas de
-fichier mal formé.
+On l'a vu nous-mêmes en modifiant volontairement un test (`assert is_valid_port(443) is
+False`). Le log affichait `assert True is False`, et l'étape Bandit n'a pas été exécutée.
 
-Elle ne remplace ni `pytest` ni `Bandit` car :
-- elle ne vérifie **aucune logique métier** (un code peut compiler parfaitement tout en étant
-  fonctionnellement incorrect) — c'est le rôle de `pytest` ;
-- elle ne détecte **aucune vulnérabilité de sécurité** (un code syntaxiquement valide peut très
-  bien contenir des pratiques dangereuses) — c'est le rôle de `Bandit`.
+À noter : on peut forcer une étape à s'exécuter malgré un échec avec `if: always()`, ou
+empêcher une étape de faire échouer le job avec `continue-on-error`. Ce n'est pas le cas dans
+notre workflow.
 
-C'est donc un contrôle complémentaire et préalable (fail fast), pas un substitut.
+**Question 4 : Pourquoi est-il utile de bloquer l'intégration d'une Pull Request lorsque les tests échouent ?**
+
+Pour protéger `main`. Si on laisse passer du code dont les tests échouent, on introduit des
+bugs (des régressions) dans la branche qui est censée toujours fonctionner.
+
+Bloquer la PR a trois avantages :
+
+* `main` reste stable et prête à être déployée ;
+* le développeur corrige le problème tout de suite, pendant qu'il a encore son code en tête,
+  au lieu de le découvrir des semaines plus tard (ou qu'un collègue le découvre en
+  production) ;
+* le contrôle est automatique : il ne dépend pas de la vigilance d'un relecteur.
+
+En pratique, ce blocage se configure sur GitHub avec une règle de protection de branche.
+
+**Question 5 : Quelle différence entre le contrôle SAST (Bandit) et les tests fonctionnels pytest ?**
+
+Ils ne cherchent pas la même chose.
+
+* pytest exécute le code et vérifie qu'il fait bien ce qu'on attend. Il répond à la question :
+  « Est-ce que le code fonctionne correctement ? »
+* Bandit lit le code sans l'exécuter (analyse statique, ou SAST). Il cherche des pratiques
+  connues pour être dangereuses : fonctions risquées, mots de passe écrits en dur, mauvaise
+  utilisation de certaines bibliothèques… Il répond à la question : « Est-ce que le code
+  contient des failles de sécurité connues ? »
+
+Un code peut passer tous les tests et contenir quand même une faille, et inversement. Les deux
+contrôles sont donc complémentaires.
+
+## Bonus : `python -m compileall -q network_check.py`
+
+Cette commande compile le fichier en bytecode Python (`.pyc`) sans l'exécuter. Elle vérifie
+seulement que la syntaxe est correcte. Elle est très rapide et repère tout de suite un fichier
+mal écrit (principe du fail fast).
+
+En revanche, elle ne remplace ni pytest ni Bandit :
+
+* elle ne vérifie pas la logique : un code peut compiler sans erreur et donner de mauvais
+  résultats. Ça, c'est le rôle de pytest ;
+* elle ne cherche pas de failles : un code dont la syntaxe est correcte peut contenir des
+  pratiques dangereuses. Ça, c'est le rôle de Bandit.
+
+C'est un premier filtre à placer avant les deux autres, pas un remplaçant.
